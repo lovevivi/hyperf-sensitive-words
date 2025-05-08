@@ -1,0 +1,28 @@
+{
+    "name": "kkguan/sensitive-words",
+    "description": "Sensitive words filtering component for Hyperf",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "php",
+        "hyperf",
+        "sensitive-words",
+        "filter"
+    ],
+    "require": {
+        "php": ">=7.3",
+        "hyperf/framework": "~2.2.0",
+        "hyperf/di": "~2.2.0",
+        "hyperf/config": "~2.2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "SensitiveWords\\": "src/"
+        }
+    },
+    "extra": {
+        "hyperf": {
+            "config": "SensitiveWords\\ConfigProvider"
+        }
+    }
+}
