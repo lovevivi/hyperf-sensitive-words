@@ -4,7 +4,7 @@ namespace SensitiveWords\Helpers;
 
 use Hyperf\Context\Context;
 use Hyperf\Contract\ConfigInterface;
-use SensitiveWords\Helpers\Exceptions\SensitiveWordException;
+use SensitiveWords\Exceptions\SensitiveWordException;
 
 class SensitiveHelper
 {
@@ -341,7 +341,7 @@ class SensitiveHelper
      * @param string $filepath
      *
      * @return $this
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function setTreeByFile($filepath = '')
     {
@@ -388,7 +388,7 @@ class SensitiveHelper
      * @param null $sensitiveWords
      *
      * @return $this
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function setTree($sensitiveWords = null)
     {
@@ -430,7 +430,7 @@ class SensitiveHelper
      * @param int      $matchType  匹配类型 [默认为最小匹配规则]
      * @param int      $wordNum    需要获取的敏感词数量 [默认获取全部]
      * @return array
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function getBadWord($content, $matchType = 1, $wordNum = 0)
     {
@@ -542,7 +542,7 @@ class SensitiveHelper
      * @param int    $matchType
      *
      * @return mixed
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function replace($content, $replaceChar = '', $repeat = false, $matchType = 1)
     {
@@ -587,7 +587,7 @@ class SensitiveHelper
      * @param int    $matchType
      *
      * @return mixed
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function mark($content, $sTag, $eTag, $matchType = 1)
     {
@@ -628,7 +628,7 @@ class SensitiveHelper
      * @param $content
      *
      * @return bool
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function islegal($content)
     {

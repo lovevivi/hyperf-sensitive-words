@@ -6,7 +6,7 @@ namespace SensitiveWords;
 
 use Hyperf\Contract\ConfigInterface;
 use SensitiveWords\Helpers\SensitiveHelper;
-use SensitiveWords\Helpers\Exceptions\SensitiveWordException;
+use SensitiveWords\Exceptions\SensitiveWordException;
 
 class SensitiveWordsManager
 {
