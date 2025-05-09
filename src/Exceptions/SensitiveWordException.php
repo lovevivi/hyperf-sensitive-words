@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace SensitiveWords\Helpers\Exceptions;
+namespace SensitiveWords\Exceptions;
 
 /**
  * 敏感词异常类
