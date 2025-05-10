@@ -23,26 +23,26 @@ class SensitiveAspect extends AbstractAspect
     public $annotations = [
         SensitiveCheck::class,
     ];
-    
+
     /**
      * @var SensitiveWordsManager
      */
     protected $sensitiveWordsManager;
-    
+
     public function __construct(SensitiveWordsManager $sensitiveWordsManager)
     {
         $this->sensitiveWordsManager = $sensitiveWordsManager;
     }
-    
+
     public function process(ProceedingJoinPoint $proceedingJoinPoint)
     {
         $annotation = $proceedingJoinPoint->getAnnotationMetadata()->method[SensitiveCheck::class];
         $arguments = $proceedingJoinPoint->getArguments();
         $needModify = false;
-        
+
         // 获取方法参数名称
         $parameterNames = $this->getMethodParameterNames($proceedingJoinPoint);
-        
+
         // 处理参数中的敏感词
         foreach ($arguments as $index => $argument) {
             if (is_string($argument) && isset($parameterNames[$index])) {
@@ -50,10 +50,10 @@ class SensitiveAspect extends AbstractAspect
                 if ($paramName === $annotation->param && $annotation->replace) {
                     try {
                         $modifiedArgument = $this->sensitiveWordsManager->replace(
-                            $argument, 
+                            $argument,
                             $annotation->replaceChar
                         );
-                        
+
                         // 如果处理后的参数与原参数不同，则更新
                         if ($modifiedArgument !== $argument) {
                             $arguments[$index] = $modifiedArgument;
@@ -65,16 +65,16 @@ class SensitiveAspect extends AbstractAspect
                 }
             }
         }
-        
-        // 如果参数被修改，使用修改后的参数数组重新调用proceed
+
+        // 如果参数被修改，直接返回修改后的参数
         if ($needModify) {
-            return $proceedingJoinPoint->process($arguments);
+            return $arguments[0];
         }
-        
+
         // 如果没有修改，直接调用proceed
         return $proceedingJoinPoint->process();
     }
-    
+
     /**
      * 获取方法的参数名称列表
      *
@@ -84,16 +84,16 @@ class SensitiveAspect extends AbstractAspect
     protected function getMethodParameterNames(ProceedingJoinPoint $proceedingJoinPoint): array
     {
         $parameterNames = [];
-        
+
         try {
             // 获取类和方法信息
             $className = $proceedingJoinPoint->className;
             $methodName = $proceedingJoinPoint->methodName;
-            
+
             // 使用反射获取参数信息
             $reflectionMethod = new ReflectionMethod($className, $methodName);
             $parameters = $reflectionMethod->getParameters();
-            
+
             // 提取参数名称
             foreach ($parameters as $key => $parameter) {
                 /** @var ReflectionParameter $parameter */
@@ -102,7 +102,7 @@ class SensitiveAspect extends AbstractAspect
         } catch (\ReflectionException $e) {
             // 反射异常处理
         }
-        
+
         return $parameterNames;
     }
 } 

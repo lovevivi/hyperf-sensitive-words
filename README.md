@@ -123,20 +123,44 @@ use SensitiveWords\Annotation\SensitiveCheck;
 class ContentController
 {
     /**
-     * @RequestMapping(path="post", methods="post")
-     * @SensitiveCheck(param="content", replace=true, replaceChar="*")
+     * @RequestMapping(path="/sensitive/aspect-test", methods={"GET", "POST"})
      */
-    public function post(string $content)
+    public function test(RequestInterface $request)
     {
-        // $content已自动过滤敏感词
-        return ['content' => $content];
+        // 从请求中获取内容
+        $content = $request->input('string', '');
+        
+        // 调用助手方法，它将被切片处理
+        $filteredContent = $this->filterContent($content);
+        
+        // 使用过滤后的内容构建响应
+        return [
+            'code' => 0,
+            'message' => '成功',
+            'data' => [
+                'original_content' => $content,
+                'processed_content' => $filteredContent
+            ]
+        ];
+    }
+    
+    /**
+     * 助手方法：过滤敏感词
+     * 
+     * @SensitiveCheck(param="content", replace=true, replaceChar="#")
+     */
+    protected function filterContent(string $content): string
+    {
+        // 切片会在方法执行前处理$content参数
+        // 这里直接返回(可能已经被过滤的)内容
+        return $content;
     }
 }
 ```
 
 ### 3. 使用中间件方式
 
-在 `config/autoload/middlewares.php` 中添加：
+方式一：使用全局中间件，在 `config/autoload/middlewares.php` 中添加：
 
 ```php
 return [
@@ -144,6 +168,17 @@ return [
         SensitiveWords\Middleware\SensitiveWordsMiddleware::class,
     ],
 ];
+```
+方式二：按需使用中间件：注解方式注入中间件
+
+```php
+use Hyperf\HttpServer\Annotation\Middleware;
+use SensitiveWords\Middleware\SensitiveWordsMiddleware;
+
+/**
+ * @Middleware(SensitiveWordsMiddleware::class)
+ */
+class SensitiveMiddlewareTestController
 ```
 
 同时在配置文件中设置 `middleware_enable` 为 `true` 可以启用中间件自动过滤功能。
