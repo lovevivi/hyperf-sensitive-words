@@ -1,7 +1,4 @@
 <?php
-/**
- * php构建哈希表类.
- */
 
 declare(strict_types=1);
 
@@ -12,63 +9,45 @@ class HashMap
     /**
      * 哈希表变量
      *
-     * @var array|null
+     * @var array
      */
     protected $hashTable = array();
 
     public function __construct(){}
 
     /**
-     * 向HashMap中添加一个键值对
+     * 向HashMap中添加一个键值对。
      *
-     * @param $key
-     * @param $value
-     * @return mixed|null
+     * @param mixed $key
+     * @param mixed $value
      */
     public function put($key, $value)
     {
-        if (! array_key_exists($key, $this->hashTable)) {
-            $this->hashTable[$key] = $value;
-            return null;
-        }
-        $_temp = $this->hashTable[$key];
         $this->hashTable[$key] = $value;
-        return $_temp;
     }
 
     /**
      * 根据key获取对应的value
      *
-     * @param $key
+     * @param mixed $key
      * @return mixed|null
      */
     public function get($key)
     {
-        if (array_key_exists($key, $this->hashTable)) {
-            return $this->hashTable[$key];
-        }
-        return null;
+        return $this->hashTable[$key] ?? null;
     }
 
     /**
      * 删除指定key的键值对
      *
-     * @param $key
-     * @return mixed|null
+     * @param mixed $key
+     * @return mixed|null 返回被删除的值，如果键不存在则返回null。
      */
     public function remove($key)
     {
-        $temp_table = array();
         if (array_key_exists($key, $this->hashTable)) {
             $tempValue = $this->hashTable[$key];
-            while ($curValue = current($this->hashTable)) {
-                if (! (key($this->hashTable) == $key)) {
-                    $temp_table[key($this->hashTable)] = $curValue;
-                }
-                next($this->hashTable);
-            }
-            $this->hashTable = null;
-            $this->hashTable = $temp_table;
+            unset($this->hashTable[$key]);
             return $tempValue;
         }
         return null;
@@ -107,8 +86,6 @@ class HashMap
                 $this->put($key, $map->get($key));
             }
         }
-
-        return ;
     }
 
     /**
@@ -118,31 +95,25 @@ class HashMap
      */
     public function removeAll()
     {
-        $this->hashTable = null;
+        $this->hashTable = array(); // 重置为空数组
         return true;
     }
 
     /**
      * 判断HashMap中是否包含指定的值
      *
-     * @param $value
+     * @param mixed $value
      * @return bool
      */
     public function containsValue($value)
     {
-        while ($curValue = current($this->hashTable)) {
-            if ($curValue == $value) {
-                return true;
-            }
-            next($this->hashTable);
-        }
-        return false;
+        return in_array($value, $this->hashTable);
     }
 
     /**
      * 判断HashMap中是否包含指定的键key
      *
-     * @param $key
+     * @param mixed $key
      * @return bool
      */
     public function containsKey($key)

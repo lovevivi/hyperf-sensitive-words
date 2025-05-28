@@ -1,28 +1,56 @@
 {
     "name": "kkguan/sensitive-words",
-    "description": "Sensitive words filtering component for Hyperf",
+    "description": "基于DFA算法的敏感词过滤组件，支持动态白名单、表情符号处理、变形文本检测等高级功能",
     "type": "library",
     "license": "MIT",
     "keywords": [
         "php",
         "hyperf",
         "sensitive-words",
-        "filter"
+        "filter",
+        "dfa",
+        "whitelist",
+        "content-filter",
+        "text-processing"
     ],
     "require": {
         "php": ">=7.3",
-        "hyperf/framework": "~2.2.0",
-        "hyperf/di": "~2.2.0",
-        "hyperf/config": "~2.2.0"
+        "hyperf/framework": "~2.2.0|~3.0.0",
+        "hyperf/di": "~2.2.0|~3.0.0",
+        "hyperf/config": "~2.2.0|~3.0.0",
+        "hyperf/contract": "~2.2.0|~3.0.0",
+        "hyperf/utils": "~2.2.0|~3.0.0",
+        "hyperf/http-server": "~2.2.0|~3.0.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5",
+        "mockery/mockery": "^1.4.4",
+        "phpstan/phpstan": "^1.0"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "HyperfTest\\": "tests"
+        }
     },
     "autoload": {
         "psr-4": {
             "SensitiveWords\\": "src/"
         }
     },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit -c phpunit.xml --colors=always",
+        "analyse": "phpstan analyse --memory-limit 1024M -l 0 ./src",
+        "cs-fix": "php-cs-fixer fix $1"
+    },
     "extra": {
         "hyperf": {
             "config": "SensitiveWords\\ConfigProvider"
         }
-    }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
 }
