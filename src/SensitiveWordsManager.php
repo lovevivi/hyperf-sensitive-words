@@ -67,11 +67,11 @@ class SensitiveWordsManager
     }
     
     /**
-     * 更新词库
+     * 设置敏感词词库（覆盖现有敏感词词库）
      *
      * @throws SensitiveWordException
      */
-    public function updateWordLibrary(array $words = []): bool
+    public function setWordLibrary(array $words = []): bool
     {
         if (!empty($words)) {
             $this->sensitiveHelper->setTree($words);
@@ -164,5 +164,78 @@ class SensitiveWordsManager
         }
         
         return $this->sensitiveHelper->addWords($words);
+    }
+    
+    /**
+     * 添加白名单词语
+     * 
+     * @param array $words 要添加的白名单词语数组
+     * @return bool 是否成功添加
+     */
+    public function addWhitelistWords(array $words): bool
+    {
+        return $this->sensitiveHelper->addWhitelistWords($words);
+    }
+    
+    /**
+     * 删除白名单词语
+     * 
+     * @param array $words 要删除的白名单词语数组
+     * @return bool 是否成功删除
+     */
+    public function removeWhitelistWords(array $words): bool
+    {
+        return $this->sensitiveHelper->removeWhitelistWords($words);
+    }
+    
+    /**
+     * 清空所有白名单词语
+     * 
+     * @return bool 是否成功清空
+     */
+    public function clearWhitelist(): bool
+    {
+        return $this->sensitiveHelper->clearWhitelist();
+    }
+    
+    /**
+     * 获取当前所有白名单词语
+     * 
+     * @return array 白名单词语数组
+     */
+    public function getWhitelistWords(): array
+    {
+        return $this->sensitiveHelper->getWhitelistWords();
+    }
+    
+    /**
+     * 设置白名单词语（覆盖现有白名单）
+     * 
+     * @param array $words 白名单词语数组
+     * @return bool 是否成功设置
+     */
+    public function setWhitelistWords(array $words): bool
+    {
+        return $this->sensitiveHelper->setWhitelistWords($words);
+    }
+    
+    /**
+     * 检查词语是否在白名单中
+     * 
+     * @param string $word 要检查的词语
+     * @return bool 是否在白名单中
+     */
+    public function isWhitelisted(string $word): bool
+    {
+        return $this->sensitiveHelper->isWhitelisted($word);
+    }
+
+    /**
+     * 获取所有敏感词列表
+     * @return array 返回所有敏感词的数组
+     */
+    public function getAllSensitiveWords(): array
+    {
+        return $this->sensitiveHelper->getAllSensitiveWords();
     }
 } 
