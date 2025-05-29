@@ -23,6 +23,16 @@ class ConfigProvider
                     ],
                 ],
             ],
+            // 注册中间件，这里注册了就是全局的了
+            // 'middlewares' => [
+            //     'http' => [
+            //         \SensitiveWords\Middleware\SensitiveWordsMiddleware::class,
+            //     ],
+            // ],
+            // 注册切片
+            'aspects' => [
+                \SensitiveWords\Aspect\SensitiveAspect::class,
+            ],
             'publish' => [
                 [
                     'id' => 'config',

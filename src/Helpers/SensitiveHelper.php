@@ -4,7 +4,7 @@ namespace SensitiveWords\Helpers;
 
 use Hyperf\Context\Context;
 use Hyperf\Contract\ConfigInterface;
-use SensitiveWords\Helpers\Exceptions\SensitiveWordException;
+use SensitiveWords\Exceptions\SensitiveWordException;
 
 class SensitiveHelper
 {
@@ -47,13 +47,6 @@ class SensitiveHelper
      * @var string
      */
     protected $cacheFilePath;
-    
-    /**
-     * 词库是否已加载
-     *
-     * @var bool
-     */
-    protected $isLibraryLoaded = false;
     
     /**
      * 是否启用缓存
@@ -112,6 +105,14 @@ class SensitiveHelper
      */
     protected $variantMap = [];
 
+    /**
+     * 白名单词库
+     * 格式：['白名单词' => true]
+     *
+     * @var array
+     */
+    protected $whitelist = [];
+
     public function __construct(ConfigInterface $config)
     {
         $this->config = $config;
@@ -126,6 +127,12 @@ class SensitiveHelper
         $this->emojiStrategy = $this->config->get('sensitive_words.emoji_strategy', 'ignore');
         $this->emojiPlaceholder = $this->config->get('sensitive_words.emoji_placeholder', '[表情]');
         $this->detectVariantText = $this->config->get('sensitive_words.detect_variant_text', false);
+        
+        // 加载白名单
+        $whitelistConfig = $this->config->get('sensitive_words.whitelist', []);
+        if (!empty($whitelistConfig) && is_array($whitelistConfig)) {
+            $this->whitelist = array_fill_keys($whitelistConfig, true);
+        }
         
         // 加载变形文本映射表
         if ($this->detectVariantText) {
@@ -174,19 +181,12 @@ class SensitiveHelper
 
     /**
      * 初始化敏感词库
-     * 
      * @throws SensitiveWordException
      */
     protected function initWordLibrary()
     {
-        // 如果词库已加载，则直接返回
-        if ($this->isLibraryLoaded && $this->wordTree !== null) {
-            return;
-        }
-        
         // 尝试从缓存加载
         if ($this->enableCache && $this->loadFromCache()) {
-            $this->isLibraryLoaded = true;
             return;
         }
         
@@ -194,7 +194,6 @@ class SensitiveHelper
         $userWordPath = $this->config->get('sensitive_words.word_path', '');
         // 获取词库合并模式：override-覆盖模式，append-追加模式
         $mergeMode = $this->config->get('sensitive_words.merge_mode', 'append');
-        
         // 定义是否需要加载默认词库
         $loadDefault = true;
         
@@ -234,16 +233,13 @@ class SensitiveHelper
         }
         
         // 词库加载完成后保存到缓存
-        if ($this->enableCache && $this->wordTree !== null) {
+        if ($this->enableCache && $this->wordTree !== null && !$this->wordTree->isEmpty()) {
             $this->saveToCache();
         }
-        
-        $this->isLibraryLoaded = true;
     }
     
     /**
      * 从缓存加载词库树
-     *
      * @return bool 是否成功加载
      */
     protected function loadFromCache(): bool
@@ -268,9 +264,16 @@ class SensitiveHelper
                 return false;
             }
             
-            // 从缓存加载词库树和前缀索引
+            // 从缓存加载词库树、前缀索引和白名单
             $this->wordTree = $cacheArray['wordTree'] ?? null;
             $this->prefixIndex = $cacheArray['prefixIndex'] ?? [];
+            
+            // 加载缓存中的白名单，但不覆盖配置文件中的白名单
+            $cachedWhitelist = $cacheArray['whitelist'] ?? [];
+            if (!empty($cachedWhitelist) && is_array($cachedWhitelist)) {
+                // 合并配置文件中的白名单和缓存中的白名单
+                $this->whitelist = array_merge($this->whitelist, $cachedWhitelist);
+            }
             
             if (!($this->wordTree instanceof HashMap)) {
                 return false;
@@ -285,7 +288,6 @@ class SensitiveHelper
     
     /**
      * 保存词库树到缓存
-     *
      * @return bool 是否成功保存
      */
     protected function saveToCache(): bool
@@ -298,7 +300,8 @@ class SensitiveHelper
             // 保存词库树和前缀索引
             $cacheData = serialize([
                 'wordTree' => $this->wordTree,
-                'prefixIndex' => $this->prefixIndex
+                'prefixIndex' => $this->prefixIndex,
+                'whitelist' => $this->whitelist
             ]);
             return file_put_contents($this->cacheFilePath, $cacheData) !== false;
         } catch (\Throwable $e) {
@@ -308,13 +311,11 @@ class SensitiveHelper
     
     /**
      * 预热词库（手动触发）
-     *
      * @return bool 预热是否成功
      */
     public function warmup(): bool
     {
         try {
-            $this->isLibraryLoaded = false; // 强制重新加载
             $this->initWordLibrary();
             return $this->wordTree !== null;
         } catch (\Throwable $e) {
@@ -337,351 +338,566 @@ class SensitiveHelper
 
     /**
      * 构建敏感词树【文件模式】
-     *
      * @param string $filepath
      *
      * @return $this
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function setTreeByFile($filepath = '')
     {
-        if (!file_exists($filepath)) {
-            throw new SensitiveWordException('词库文件不存在', SensitiveWordException::CANNOT_FIND_FILE);
+        if (empty($filepath)) {
+            throw new SensitiveWordException('Sensitive word file path cannot be empty');
+        }
+        if (!file_exists($filepath) || !is_readable($filepath)) {
+            throw new SensitiveWordException("Sensitive word file does not exist or is not readable: {$filepath}");
         }
 
-        // 词库树初始化
-        $this->wordTree = $this->wordTree ?: new HashMap();
-        
-        // 清空并重建前缀索引
+        $this->wordTree = new HashMap();
         $this->prefixIndex = [];
         $this->enablePrefixIndex = $this->config->get('sensitive_words.enable_prefix_index', true);
 
-        foreach ($this->yieldToReadFile($filepath) as $word) {
-            $trimmedWord = trim($word);
+        foreach ($this->yieldToReadFile($filepath) as $line) {
+            $trimmedWord = trim($line);
             if (empty($trimmedWord)) {
                 continue;
             }
             
             $this->buildWordToTree($trimmedWord);
             
-            // 如果启用了前缀索引，则构建索引
             if ($this->enablePrefixIndex) {
                 $prefix = mb_substr($trimmedWord, 0, 1, 'utf-8');
                 if (!isset($this->prefixIndex[$prefix])) {
                     $this->prefixIndex[$prefix] = [];
                 }
-                $this->prefixIndex[$prefix][] = $trimmedWord;
+                $this->prefixIndex[$prefix][] = $trimmedWord; 
             }
         }
         
-        // 更新词库后更新缓存
-        if ($this->enableCache) {
+        if ($this->enableCache && $this->wordTree !== null && !$this->wordTree->isEmpty()) {
             $this->saveToCache();
         }
-
         return $this;
     }
 
     /**
      * 构建敏感词树【数组模式】
-     *
      * @param null $sensitiveWords
      *
      * @return $this
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function setTree($sensitiveWords = null)
     {
-        if (empty($sensitiveWords)) {
-            throw new SensitiveWordException('词库不能为空', SensitiveWordException::EMPTY_WORD_POOL);
+        if ($sensitiveWords === null) {
+            $this->wordTree = new HashMap();
+            $this->prefixIndex = [];
+            if ($this->enableCache) {
+                $this->saveToCache(); 
+            }
+            return $this;
+        }
+
+        if (!is_array($sensitiveWords)) {
+            throw new SensitiveWordException('敏感词库必须是数组类型', SensitiveWordException::EMPTY_WORD_POOL);
         }
 
         $this->wordTree = new HashMap();
-        
-        // 清空并重建前缀索引
         $this->prefixIndex = [];
         $this->enablePrefixIndex = $this->config->get('sensitive_words.enable_prefix_index', true);
 
         foreach ($sensitiveWords as $word) {
+            $word = trim($word);
+            if (empty($word)) {
+                continue;
+            }
             $this->buildWordToTree($word);
-            
-            // 如果启用了前缀索引，则构建索引
-            if ($this->enablePrefixIndex && !empty($word)) {
-                $prefix = mb_substr($word, 0, 1, 'utf-8');
-                if (!isset($this->prefixIndex[$prefix])) {
-                    $this->prefixIndex[$prefix] = [];
+
+            if ($this->enablePrefixIndex && mb_strlen($word) > 0) {
+                $firstChar = mb_substr($word, 0, 1, 'utf-8');
+                if (!isset($this->prefixIndex[$firstChar])) {
+                    $this->prefixIndex[$firstChar] = [];
                 }
-                $this->prefixIndex[$prefix][] = $word;
+                if (!in_array($word, $this->prefixIndex[$firstChar])) {
+                    $this->prefixIndex[$firstChar][] = $word;
+                }
             }
         }
-        
-        // 更新词库后更新缓存
-        if ($this->enableCache) {
+
+        if ($this->enableCache && $this->wordTree !== null && !$this->wordTree->isEmpty()) {
             $this->saveToCache();
         }
-        
         return $this;
     }
 
     /**
-     * 检测文字中的敏感词
-     *
-     * @param string   $content    待检测内容
-     * @param int      $matchType  匹配类型 [默认为最小匹配规则]
-     * @param int      $wordNum    需要获取的敏感词数量 [默认获取全部]
-     * @return array
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * 使用上下文白名单过滤已识别的潜在敏感词列表
+     * @param string $processedContent 预处理后的文本内容
+     * @param array  $potentialBadWordsInfo 潜在的敏感词信息数组，每个元素包含 ['word' => string, 'offset' => int, 'len' => int]
+     * @return array 经过上下文白名单过滤后的敏感词信息数组 (保留 offset, len)
      */
-    public function getBadWord($content, $matchType = 1, $wordNum = 0)
+    private function filterWithContextualWhitelist(string $processedContent, array $potentialBadWordsInfo): array
     {
-        // 确保词库已加载
-        if (!$this->isLibraryLoaded || $this->wordTree === null) {
+        if (empty($potentialBadWordsInfo) || empty($this->whitelist)) {
+            return $potentialBadWordsInfo; 
+        }
+
+        $finalFilteredWordsInfo = []; // 将存储包含详细信息的元素
+
+        foreach ($potentialBadWordsInfo as $badWordItem) {
+            $word = $badWordItem['word'];
+            $offset = $badWordItem['offset'];
+
+            // 1. 检查 $word 本身是否是直接白名单
+            if (isset($this->whitelist[$word])) {
+                continue; 
+            }
+
+            // 2. 检查上下文：$word 是否是更长白名单词的一部分
+            $isWhitelistedByContext = false;
+            foreach (array_keys($this->whitelist) as $whitelistedWord) {
+                $whitelistedWordLen = mb_strlen($whitelistedWord, 'utf-8');
+
+                // $word 是 $whitelistedWord 的前缀，且 $whitelistedWord 从 $offset 开始匹配
+                if (mb_strpos($whitelistedWord, $word, 0, 'utf-8') === 0) { 
+                    if (($offset + $whitelistedWordLen) <= mb_strlen($processedContent, 'utf-8') &&
+                        mb_substr($processedContent, $offset, $whitelistedWordLen, 'utf-8') === $whitelistedWord)
+                    {
+                        $isWhitelistedByContext = true;
+                        break;
+                    }
+                }
+
+                // $word 是 $whitelistedWord 的子串（非前缀）或后缀
+                $relativePos = mb_strpos($whitelistedWord, $word, 0, 'utf-8');
+                if ($relativePos !== false) { 
+                    $expectedWhitelistedWordStartInText = $offset - $relativePos;
+                    if ($expectedWhitelistedWordStartInText >= 0 && 
+                        ($expectedWhitelistedWordStartInText + $whitelistedWordLen) <= mb_strlen($processedContent, 'utf-8') && 
+                        mb_substr($processedContent, $expectedWhitelistedWordStartInText, $whitelistedWordLen, 'utf-8') === $whitelistedWord)
+                    {
+                        $isWhitelistedByContext = true;
+                        break; 
+                    }
+                }
+            }
+
+            if (!$isWhitelistedByContext) {
+                $finalFilteredWordsInfo[] = $badWordItem; // 保留完整的 $badWordItem (包含 offset, len)
+            }
+        }
+        return $finalFilteredWordsInfo; 
+    }
+
+    /**
+     * 获取所有敏感词列表
+     * @return array 返回所有敏感词的数组
+     */
+    public function getAllSensitiveWords(): array
+    {
+        // 如果词库树为null且前缀索引未初始化，则初始化词库
+        if ($this->wordTree === null && !is_array($this->prefixIndex)) {
             $this->initWordLibrary();
         }
         
-        if ($this->wordTree === null) {
-            throw new SensitiveWordException('词库树未初始化', SensitiveWordException::SYSTEM_ERROR);
+        // 如果启用了前缀索引，直接从前缀索引中获取所有词语
+        if ($this->enablePrefixIndex && !empty($this->prefixIndex)) {
+            $allWords = [];
+            foreach ($this->prefixIndex as $words) {
+                $allWords = array_merge($allWords, $words);
+            }
+            return array_values(array_unique($allWords));
         }
         
-        // 对内容进行预处理
+        // 如果没有前缀索引，从DFA树中提取所有敏感词
+        if ($this->wordTree === null || $this->wordTree->isEmpty()) {
+            return [];
+        }
+        
+        return $this->extractWordsFromTree();
+    }
+
+    /**
+     * 检测文字中的敏感词
+     * @param string   $content    待检测内容
+     * @param int      $matchType  匹配类型 [默认为最小匹配规则]
+     * @param int      $wordNum    需要获取的敏感词数量 [默认获取全部]
+     * @param bool     $returnDetails 是否返回包含偏移量和长度的详细信息 [默认false，返回string[]]
+     * @return array 返回敏感词列表。默认是字符串数组 string[]。如果 $returnDetails 为 true，则返回 array{word: string, offset: int, len: int}[]
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
+     */
+    public function getBadWord($content, $matchType = 1, $wordNum = 0, bool $returnDetails = false)
+    {
+        if ($this->wordTree === null) {
+            $this->initWordLibrary();
+        }
+        
+        if ($this->wordTree === null || $this->wordTree->isEmpty()) {
+            return []; 
+        }
+
         $processedContent = $this->preprocessContent($content);
         $this->contentLength = mb_strlen($processedContent, 'utf-8');
-        $badWordList = array();
-        
-        // 如果启用了前缀索引且内容长度适中，则先进行前缀过滤
+        $initialBadWordListWithDetails = [];
+
+        // 如果启用了前缀索引加速，并且文本长度在合理范围
         if ($this->enablePrefixIndex && count($this->prefixIndex) > 0 && $this->contentLength > 0 && $this->contentLength < 10000) {
-            // 提取内容中的所有字符做为可能的前缀
             $possiblePrefixes = [];
             for ($i = 0; $i < $this->contentLength; $i++) {
                 $char = mb_substr($processedContent, $i, 1, 'utf-8');
                 $possiblePrefixes[$char] = true;
             }
-            
-            // 对可能命中的前缀进行精确检测
+            $tempBadWordListFromPrefix = [];
             foreach (array_keys($possiblePrefixes) as $prefix) {
                 if (isset($this->prefixIndex[$prefix])) {
-                    // 针对这个前缀的词进行检测
-                    $result = $this->checkWordsWithPrefix($processedContent, $prefix, $matchType, $wordNum);
-                    if (!empty($result)) {
-                        $badWordList = array_merge($badWordList, $result);
-                        
-                        // 如果有数量限制且已达到，则提前返回
-                        if ($wordNum > 0 && count($badWordList) >= $wordNum) {
-                            return array_slice($badWordList, 0, $wordNum);
-                        }
+                    $resultDetails = $this->checkWordsWithPrefix($processedContent, $prefix);
+                    if (!empty($resultDetails)) {
+                        $tempBadWordListFromPrefix = array_merge($tempBadWordListFromPrefix, $resultDetails);
                     }
                 }
             }
-            
-            return $badWordList;
+            $initialBadWordListWithDetails = array_map("unserialize", array_unique(array_map("serialize", $tempBadWordListFromPrefix)));
+
+            if (($matchType === 1 || $matchType === 0) && count($initialBadWordListWithDetails) > 1) {
+                $initialBadWordListWithDetails = $this->_alignPrefixIndexWords($initialBadWordListWithDetails, $matchType);
+            }
+        } else { 
+            for ($length = 0; $length < $this->contentLength; $length++) {
+                $matchFlag = 0;
+                $flag = false;
+                $tempMap = $this->wordTree;
+                for ($i = $length; $i < $this->contentLength; $i++) {
+                    $keyChar = mb_substr($processedContent, $i, 1, 'utf-8');
+                    $nowMap = $tempMap->get($keyChar);
+                    if (empty($nowMap)) {
+                        break;
+                    }
+                    $tempMap = $nowMap;
+                    $matchFlag++;
+                    if (false === $nowMap->get('ending')) {
+                        continue;
+                    }
+                    $flag = true;
+                    if (1 === $matchType) { 
+                        break;
+                    }
+                }
+                if (!$flag) $matchFlag = 0;
+                if ($matchFlag <= 0) continue;
+                $currentBadWord = mb_substr($processedContent, $length, $matchFlag, 'utf-8');
+                $initialBadWordListWithDetails[] = [
+                    'word' => $currentBadWord,
+                    'offset' => $length, 
+                    'len' => $matchFlag,
+                ];
+                $length = $length + $matchFlag - 1; 
+            }
+            $initialBadWordListWithDetails = array_map("unserialize", array_unique(array_map("serialize", $initialBadWordListWithDetails)));
         }
         
-        // 如果没有启用前缀索引或内容过长，则使用原有的完整检测
-        for ($length = 0; $length < $this->contentLength; $length++) {
-            $matchFlag = 0;
-            $flag = false;
-            $tempMap = $this->wordTree;
-            for ($i = $length; $i < $this->contentLength; $i++) {
-                $keyChar = mb_substr($processedContent, $i, 1, 'utf-8');
+        $finalBadWordsWithDetails = $this->filterWithContextualWhitelist($processedContent, $initialBadWordListWithDetails);
 
-                // 获取指定节点树
-                $nowMap = $tempMap->get($keyChar);
-
-                // 不存在节点树，直接返回
-                if (empty($nowMap)) {
-                    break;
+        // 统一处理 $wordNum，如果需要限制数量，先排序再截取
+        if ($wordNum > 0 && count($finalBadWordsWithDetails) > $wordNum) {
+            usort($finalBadWordsWithDetails, function ($a, $b) {
+                if ($a['offset'] == $b['offset']) {
+                    return $b['len'] - $a['len']; 
                 }
-
-                // 存在，则判断是否为最后一个
-                $tempMap = $nowMap;
-
-                // 找到相应key，偏移量+1
-                $matchFlag++;
-
-                // 如果为最后一个匹配规则,结束循环，返回匹配标识数
-                if (false === $nowMap->get('ending')) {
-                    continue;
-                }
-
-                $flag = true;
-
-                // 最小规则，直接退出
-                if (1 === $matchType)  {
-                    break;
-                }
-            }
-
-            if (! $flag) {
-                $matchFlag = 0;
-            }
-
-            // 找到相应key
-            if ($matchFlag <= 0) {
-                continue;
-            }
-
-            $badWordList[] = mb_substr($processedContent, $length, $matchFlag, 'utf-8');
-
-            // 有返回数量限制
-            if ($wordNum > 0 && count($badWordList) == $wordNum) {
-                return $badWordList;
-            }
-
-            // 需匹配内容标志位往后移
-            $length = $length + $matchFlag - 1;
+                return $a['offset'] - $b['offset']; 
+            });
+            $finalBadWordsWithDetails = array_slice($finalBadWordsWithDetails, 0, $wordNum);
         }
-        return $badWordList;
+
+        if ($returnDetails) {
+            // 确保返回的数组是标准的、从0开始的数字索引数组
+            return array_values($finalBadWordsWithDetails); 
+        } else {
+            // 默认情况：返回敏感词字符串列表 (string[])
+            $resultWords = [];
+            foreach ($finalBadWordsWithDetails as $item) { 
+                $resultWords[] = $item['word'];
+            }
+            // 返回唯一的词语字符串列表
+            return array_values(array_unique($resultWords)); 
+        }
     }
+
 
     /**
      * 替换敏感字字符
-     *
      * @param        $content      文本内容
      * @param string $replaceChar  替换字符
      * @param bool   $repeat       true=>重复替换为敏感词相同长度的字符
      * @param int    $matchType
      *
      * @return mixed
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function replace($content, $replaceChar = '', $repeat = false, $matchType = 1)
     {
-        if (empty($content)) {
-            throw new SensitiveWordException('请填写检测的内容', SensitiveWordException::EMPTY_CONTENT);
-        }
-        
-        // 确保词库已加载
-        if (!$this->isLibraryLoaded || $this->wordTree === null) {
-            $this->initWordLibrary();
-        }
-        
-        // 对内容进行预处理
+        $detailedBadWords = $this->getBadWord($content, $matchType, 0, true);
         $processedContent = $this->preprocessContent($content);
-        
-        $badWordList = self::$badWordList ? self::$badWordList : $this->getBadWord($processedContent, $matchType);
-        
-        // 未检测到敏感词，直接返回原始内容
-        if (empty($badWordList)) {
-            return $content;
+  
+        if (empty($detailedBadWords)) {
+            return $processedContent; 
         }
-        
-        // 在原始内容中替换敏感词
-        $result = $content;
-        foreach ($badWordList as $badWord) {
-            $hasReplacedChar = $replaceChar;
+
+        // 从后往前替换，避免 offset 错乱
+        for ($i = count($detailedBadWords) - 1; $i >= 0; $i--) {
+            $badWordInfo = $detailedBadWords[$i];
+            $wordToReplace = $badWordInfo['word'];
+            $offset = $badWordInfo['offset'];
+            $len = $badWordInfo['len'];
+
+            $actualReplaceChar = $replaceChar;
             if ($repeat) {
-                $hasReplacedChar = $this->dfaBadWordConversChars($badWord, $replaceChar);
+                $actualReplaceChar = str_repeat($replaceChar, mb_strlen($wordToReplace));
             }
-            $result = str_replace($badWord, $hasReplacedChar, $result);
+
+            $processedContent = self::mb_substr_replace($processedContent, $actualReplaceChar, $offset, $len);
         }
-        
-        return $result;
+
+        return $processedContent;
     }
 
     /**
      * 标记敏感词
-     *
-     * @param        $content    文本内容
-     * @param string $sTag       标签开头，如<mark>
-     * @param string $eTag       标签结束，如</mark>
-     * @param int    $matchType
-     *
-     * @return mixed
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @param string $content 待检测内容
+     * @param string $sTag 敏感词包裹开始标签
+     * @param string $eTag 敏感词包裹结束标签
+     * @param int $matchType 匹配类型，默认为 1 (最长匹配)
+     * @return string 返回标记后的内容 (在预处理后的内容上操作)
+     * @throws SensitiveWordException
      */
     public function mark($content, $sTag, $eTag, $matchType = 1)
     {
-        if (empty($content)) {
-            throw new SensitiveWordException('请填写检测的内容', SensitiveWordException::EMPTY_CONTENT);
-        }
-        
-        // 确保词库已加载
-        if (!$this->isLibraryLoaded || $this->wordTree === null) {
-            $this->initWordLibrary();
-        }
-        
-        // 对内容进行预处理
+        $detailedBadWords = $this->getBadWord($content, $matchType, 0, true);
         $processedContent = $this->preprocessContent($content);
-        
-        $badWordList = self::$badWordList ? self::$badWordList : $this->getBadWord($processedContent, $matchType);
-        
-        // 未检测到敏感词，直接返回原始内容
-        if (empty($badWordList)) {
-            return $content;
+  
+        if (empty($detailedBadWords)) {
+            return $processedContent; 
         }
-        
-        $badWordList = array_unique($badWordList);
-        
-        // 在原始内容中标记敏感词
-        $result = $content;
-        foreach ($badWordList as $badWord) {
-            $replaceChar = $sTag . $badWord . $eTag;
-            $result = str_replace($badWord, $replaceChar, $result);
+
+        // 从后往前标记，避免 offset 错乱
+        for ($i = count($detailedBadWords) - 1; $i >= 0; $i--) {
+            $badWordInfo = $detailedBadWords[$i];
+            $wordToMark = $badWordInfo['word']; 
+            $offset = $badWordInfo['offset'];
+            $len = $badWordInfo['len'];
+
+            $replacement = $sTag . $wordToMark . $eTag;
+            $processedContent = self::mb_substr_replace($processedContent, $replacement, $offset, $len);
         }
-        
-        return $result;
+
+        return $processedContent;
     }
 
     /**
      * 被检测内容是否合法
-     *
      * @param $content
-     *
      * @return bool
-     * @throws \SensitiveWords\Helpers\Exceptions\SensitiveWordException
+     * @throws \SensitiveWords\Exceptions\SensitiveWordException
      */
     public function islegal($content)
     {
-        // 确保词库已加载
-        if (!$this->isLibraryLoaded || $this->wordTree === null) {
+        return empty($this->getBadWord($content, 1, 1)); 
+    }
+
+     /**
+     * 添加增量更新词库
+     * @param array $words
+     *
+     * @return bool
+     */
+    public function addWords(array $words): bool
+    {
+        if (empty($words)) {
+            return false;
+        }
+
+        if ($this->wordTree === null) {
             $this->initWordLibrary();
         }
         
-        if ($this->wordTree === null) {
-            throw new SensitiveWordException('词库树未初始化', SensitiveWordException::SYSTEM_ERROR);
+        if (!$this->wordTree instanceof HashMap) {
+             $this->wordTree = new HashMap();
+             $this->prefixIndex = []; 
+        }
+        if (!is_array($this->prefixIndex)) { 
+            $this->prefixIndex = [];
+        }
+
+        $this->enablePrefixIndex = $this->config->get('sensitive_words.enable_prefix_index', true);
+        
+        $wordsAdded = false; 
+        foreach ($words as $word) {
+            $word = trim($this->preprocessContent($word)); 
+            if (empty($word)) {
+                continue;
+            }
+            
+            $this->buildWordToTree($word);
+            $wordsAdded = true; 
+
+            if ($this->enablePrefixIndex) {
+                if (!is_array($this->prefixIndex)) { 
+                    $this->prefixIndex = [];
+                }
+                $prefix = mb_substr($word, 0, 1, 'utf-8');
+                if (!isset($this->prefixIndex[$prefix])) {
+                    $this->prefixIndex[$prefix] = [];
+                }
+                if (!in_array($word, $this->prefixIndex[$prefix])) { 
+                    $this->prefixIndex[$prefix][] = $word;
+                }
+            }
+        }
+
+        if ($wordsAdded && $this->enableCache) {
+            $this->saveToCache();
         }
         
-        // 对内容进行预处理
-        $processedContent = $this->preprocessContent($content);
+        return $wordsAdded;
+    }
+
+    /**
+     * 添加白名单词语
+     * @param array $words 要添加的白名单词语数组
+     * @return bool 是否成功添加
+     */
+    public function addWhitelistWords(array $words): bool
+    {
+        if (empty($words)) {
+            return false;
+        }
+
+        if ($this->wordTree === null) {
+            $this->initWordLibrary();
+        }
         
-        $this->contentLength = mb_strlen($processedContent, 'utf-8');
+        if (!$this->wordTree instanceof HashMap) {
+             $this->wordTree = new HashMap();
+             $this->prefixIndex = []; 
+        }
 
-        for ($length = 0; $length < $this->contentLength; $length++) {
-            $matchFlag = 0;
-
-            $tempMap = $this->wordTree;
-            for ($i = $length; $i < $this->contentLength; $i++) {
-                $keyChar = mb_substr($processedContent, $i, 1, 'utf-8');
-
-                // 获取指定节点树
-                $nowMap = $tempMap->get($keyChar);
-
-                // 不存在节点树，直接返回
-                if (empty($nowMap)) {
-                    break;
-                }
-
-                // 找到相应key，偏移量+1
-                $tempMap = $nowMap;
-                $matchFlag++;
-
-                // 如果为最后一个匹配规则,结束循环，返回匹配标识数
-                if (false === $nowMap->get('ending')) {
-                    continue;
-                }
-
-                return false;
-            }
-
-            // 找到相应key
-            if ($matchFlag <= 0) {
+        $wordsAdded = false;
+        foreach ($words as $word) {
+            $word = trim($word);
+            if (empty($word)) {
                 continue;
             }
 
-            // 需匹配内容标志位往后移
-            $length = $length + $matchFlag - 1;
+            // 预处理白名单词语，确保与敏感词检测时的处理一致
+            $processedWord = $this->preprocessContent($word);
+            if (!empty($processedWord) && !isset($this->whitelist[$processedWord])) {
+                $this->whitelist[$processedWord] = true;
+                $wordsAdded = true;
+            }
         }
+
+        // 如果有新增白名单词语且启用了缓存，更新缓存
+        if ($wordsAdded && $this->enableCache) {
+            $this->saveToCache();
+        }
+
+        return $wordsAdded;
+    }
+
+    /**
+     * 删除白名单词语
+     * @param array $words 要删除的白名单词语数组
+     * @return bool 是否成功删除
+     */
+    public function removeWhitelistWords(array $words): bool
+    {
+        if (empty($words) || empty($this->whitelist)) {
+            return false;
+        }
+
+        $wordsRemoved = false;
+        foreach ($words as $word) {
+            $word = trim($word);
+            if (empty($word)) {
+                continue;
+            }
+
+            // 预处理白名单词语
+            $processedWord = $this->preprocessContent($word);
+            if (isset($this->whitelist[$processedWord])) {
+                unset($this->whitelist[$processedWord]);
+                $wordsRemoved = true;
+            }
+        }
+
+        // 如果有删除白名单词语且启用了缓存，更新缓存
+        if ($wordsRemoved && $this->enableCache) {
+            $this->saveToCache();
+        }
+
+        return $wordsRemoved;
+    }
+
+    /**
+     * 清空所有白名单词语
+     * @return bool 是否成功清空
+     */
+    public function clearWhitelist(): bool
+    {
+        if (empty($this->whitelist)) {
+            return false;
+        }
+
+        $this->whitelist = [];
+
+        // 如果启用了缓存，更新缓存
+        if ($this->enableCache) {
+            $this->saveToCache();
+        }
+
         return true;
+    }
+
+    /**
+     * 获取当前所有白名单词语
+     * @return array 白名单词语数组
+     */
+    public function getWhitelistWords(): array
+    {
+        return array_keys($this->whitelist);
+    }
+
+    /**
+     * 设置白名单词语（覆盖现有白名单）
+     * @param array $words 白名单词语数组
+     * @return bool 是否成功设置
+     */
+    public function setWhitelistWords(array $words): bool
+    {
+        $this->whitelist = [];
+
+        if (empty($words)) {
+            // 如果启用了缓存，更新缓存
+            if ($this->enableCache) {
+                $this->saveToCache();
+            }
+            return true;
+        }
+
+        return $this->addWhitelistWords($words);
+    }
+
+    /**
+     * 检查词语是否在白名单中
+     * @param string $word 要检查的词语
+     * @return bool 是否在白名单中
+     */
+    public function isWhitelisted(string $word): bool
+    {
+        if (empty($word) || empty($this->whitelist)) {
+            return false;
+        }
+
+        $processedWord = $this->preprocessContent($word);
+        return isset($this->whitelist[$processedWord]);
     }
 
     /**
@@ -702,7 +918,6 @@ class SensitiveHelper
 
     /**
      * 将单个敏感词构建成树结构
-     *
      * @param string $word
      *
      * @return mixed
@@ -760,106 +975,44 @@ class SensitiveHelper
     }
 
     /**
-     * 添加针对特定前缀词库的检测方法
+     * 在给定内容中查找所有以特定字符开头并存在于前缀索引中的敏感词。
+     * 此方法是前缀索引优化路径的一部分。它接收一个字符（前缀），
+     * 然后在内容中搜索前缀索引中所有以该字符开头的敏感词的完整匹配。
      *
-     * @param string $content
-     * @param string $prefix
-     * @param int    $matchType
-     * @param int    $wordNum
+     * @param string $content         待检测的内容（通常是预处理后的）。
+     * @param string $prefix          单个字符，作为查找的前缀。
      *
-     * @return array
+     * @return array 返回一个扁平数组，包含所有在内容中找到的、以指定前缀开头的敏感词字符串。
      */
-    protected function checkWordsWithPrefix($content, $prefix, $matchType = 1, $wordNum = 0)
+    protected function checkWordsWithPrefix($content, $prefix)
     {
         if (!isset($this->prefixIndex[$prefix]) || empty($this->prefixIndex[$prefix])) {
             return [];
         }
         
-        $badWordList = [];
-        
-        // 从前缀索引中获取待检查的敏感词列表
+        $badWordList = []; // This will now store arrays, not strings
         $wordsToCheck = $this->prefixIndex[$prefix];
-        
-        // 对每个敏感词进行检查
+        $contentLength = mb_strlen($content, 'utf-8'); 
         foreach ($wordsToCheck as $word) {
             $wordLength = mb_strlen($word, 'utf-8');
+            if ($wordLength == 0) continue;
+            if ($wordLength > $contentLength) continue;
             
-            // 如果敏感词长度大于内容长度，则跳过
-            if ($wordLength > $this->contentLength) {
-                continue;
-            }
-            
-            // 在内容中查找敏感词
             $pos = 0;
-            while (($pos = mb_strpos($content, $word, $pos, 'utf-8')) !== false) {
-                $badWordList[] = $word;
-                $pos += $wordLength;
-                
-                // 如果有数量限制且已达到，则提前返回
-                if ($wordNum > 0 && count($badWordList) >= $wordNum) {
-                    return $badWordList;
-                }
-                
-                // 如果是最小匹配模式，找到一个就可以了
-                if ($matchType === 1) {
-                    break;
-                }
+            while (($currentPos = mb_strpos($content, $word, $pos, 'utf-8')) !== false) { 
+                $badWordList[] = [
+                    'word' => $word,
+                    'offset' => $currentPos,
+                    'len' => $wordLength
+                ];
+                $pos = $currentPos + $wordLength;
             }
         }
-        
-        return $badWordList;
-    }
-
-    /**
-     * 添加增量更新词库的方法
-     *
-     * @param array $words
-     *
-     * @return bool
-     */
-    public function addWords(array $words): bool
-    {
-        if (empty($words)) {
-            return false;
-        }
-        
-        // 确保词库已初始化
-        if ($this->wordTree === null) {
-            $this->wordTree = new HashMap();
-        }
-        
-        $this->enablePrefixIndex = $this->config->get('sensitive_words.enable_prefix_index', true);
-        
-        foreach ($words as $word) {
-            if (empty($word)) {
-                continue;
-            }
-            
-            $this->buildWordToTree($word);
-            
-            // 如果启用了前缀索引，则更新索引
-            if ($this->enablePrefixIndex) {
-                $prefix = mb_substr($word, 0, 1, 'utf-8');
-                if (!isset($this->prefixIndex[$prefix])) {
-                    $this->prefixIndex[$prefix] = [];
-                }
-                if (!in_array($word, $this->prefixIndex[$prefix])) {
-                    $this->prefixIndex[$prefix][] = $word;
-                }
-            }
-        }
-        
-        // 更新词库后更新缓存
-        if ($this->enableCache) {
-            $this->saveToCache();
-        }
-        
-        return true;
+        return $badWordList; 
     }
 
     /**
      * 内容预处理，处理表情符号和特殊字符
-     * 
      * @param string $content 原始内容
      * @return string 预处理后的内容
      */
@@ -971,4 +1124,98 @@ class SensitiveHelper
             '~' => '',
         ];
     }
+
+    /**
+     * 多字节安全的字符串替换
+     * @param string $string 原始字符串
+     * @param string $replacement 替换内容
+     * @param int $start 开始位置
+     * @param int|null $length 替换长度，如果为null，则替换到字符串末尾
+     * @param string|null $encoding 字符编码
+     * @return string 替换后的字符串
+     */
+    protected static function mb_substr_replace($string, $replacement, $start, $length = null, $encoding = null)
+    {
+        if ($encoding === null) {
+            $encoding = mb_internal_encoding();
+        }
+        if ($length === null) {
+            return mb_substr($string, 0, $start, $encoding) . $replacement;
+        }
+        return mb_substr($string, 0, $start, $encoding) . $replacement . mb_substr($string, $start + $length, mb_strlen($string, $encoding) - ($start + $length), $encoding);
+    }
+
+    /**
+     * 根据匹配类型对齐通过前缀索引找到的词语列表
+     * 用于处理从前缀索引初步筛选出的敏感词列表，确保其符合指定的匹配规则（最小匹配或最大匹配），
+     * 并排除重叠的词语，其行为应与DFA主扫描路径的匹配逻辑一致。
+     * @param array $wordsList 包含词语详细信息（offset, len, word）的数组。
+     * @param int   $matchType 匹配类型（0 表示最大匹配，1 表示最小匹配）。
+     * @return array 对齐和过滤后的词语详细信息数组。
+     */
+    protected function _alignPrefixIndexWords(array $wordsList, int $matchType): array
+    {
+        usort($wordsList, function($a, $b) use ($matchType) {
+            if ($a['offset'] !== $b['offset']) {
+                return $a['offset'] - $b['offset'];
+            }
+            return ($matchType === 1) ? ($a['len'] - $b['len']) : ($b['len'] - $a['len']);
+        });
+
+        $alignedWords = [];
+        $lastCoveredPosition = -1;
+        foreach ($wordsList as $word) {
+            if ($word['offset'] >= $lastCoveredPosition) {
+                $alignedWords[] = $word;
+                $lastCoveredPosition = $word['offset'] + $word['len'];
+            }
+        }
+        return $alignedWords;
+    }
+
+     /**
+     * 从DFA树中提取所有敏感词（当前缀索引不可用时的备用方案）
+     * @return array 所有敏感词的数组
+     */
+    protected function extractWordsFromTree(): array
+    {
+        if ($this->wordTree === null || $this->wordTree->isEmpty()) {
+            return [];
+        }
+        
+        $words = [];
+        $this->traverseTree($this->wordTree, '', $words);
+        return array_values(array_unique($words));
+    }
+
+    /**
+     * 递归遍历DFA树，提取所有完整的敏感词
+     * @param HashMap $node 当前节点
+     * @param string $currentWord 当前构建的词语
+     * @param array &$words 结果数组（引用传递）
+     */
+    protected function traverseTree(HashMap $node, string $currentWord, array &$words): void
+    {
+        // 检查当前节点是否是一个完整词语的结尾
+        if ($node->get('ending') === true) {
+            $words[] = $currentWord;
+        }
+        
+        // 遍历所有子节点
+        $keys = $node->keys();
+        foreach ($keys as $key) {
+            // 跳过特殊标记键
+            if ($key === 'ending') {
+                continue;
+            }
+            
+            $childNode = $node->get($key);
+            if ($childNode instanceof HashMap) {
+                $this->traverseTree($childNode, $currentWord . $key, $words);
+            }
+        }
+    }
+
+
+
 }
