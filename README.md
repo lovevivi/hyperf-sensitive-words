@@ -19,6 +19,12 @@
 composer require lovevivi/hyperf-sensitive-words
 ```
 
+## 发布配置
+
+```bash
+php bin/hyperf.php vendor:publish kkguan/sensitive-words
+```
+
 ## 配置
 
 配置文件位于 `config/autoload/sensitive_words.php`：
