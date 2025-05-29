@@ -16,13 +16,13 @@
 ## 安装
 
 ```bash
-composer require kkguan/sensitive-words
+composer require lovevivi/sensitive-words
 ```
 
 ## 发布配置
 
 ```bash
-php bin/hyperf.php vendor:publish kkguan/sensitive-words
+php bin/hyperf.php vendor:publish lovevivi/sensitive-words
 ```
 
 ## 配置
