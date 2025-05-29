@@ -1,5 +1,5 @@
 {
-    "name": "lovevivi/sensitive-words",
+    "name": "lovevivi/hyperf-sensitive-words",
     "description": "基于DFA算法的敏感词过滤组件，支持动态白名单、表情符号处理、变形文本检测等高级功能",
     "type": "library",
     "license": "MIT",
@@ -13,10 +13,10 @@
         "content-filter",
         "text-processing"
     ],
-    "homepage": "https://github.com/lovevivi/sensitive-words",
+    "homepage": "https://github.com/lovevivi/hyperf-sensitive-words",
     "support": {
-        "issues": "https://github.com/lovevivi/sensitive-words/issues",
-        "source": "https://github.com/lovevivi/sensitive-words"
+        "issues": "https://github.com/lovevivi/hyperf-sensitive-words/issues",
+        "source": "https://github.com/lovevivi/hyperf-sensitive-words"
     },
     "require": {
         "php": ">=7.3",

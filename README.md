@@ -16,13 +16,13 @@
 ## 安装
 
 ```bash
-composer require lovevivi/sensitive-words
+composer require lovevivi/hyperf-sensitive-words
 ```
 
 ## 发布配置
 
 ```bash
-php bin/hyperf.php vendor:publish lovevivi/sensitive-words
+php bin/hyperf.php vendor:publish lovevivi/hyperf-sensitive-words
 ```
 
 ## 配置
