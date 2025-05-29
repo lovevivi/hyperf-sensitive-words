@@ -22,7 +22,7 @@ composer require lovevivi/hyperf-sensitive-words
 ## 发布配置
 
 ```bash
-php bin/hyperf.php vendor:publish kkguan/sensitive-words
+php bin/hyperf.php vendor:publish lovevivi/hyperf-sensitive-words
 ```
 
 ## 配置
