@@ -113,6 +113,7 @@ class SensitiveHelper
      */
     protected $whitelist = [];
 
+
     public function __construct(ConfigInterface $config)
     {
         $this->config = $config;
@@ -495,7 +496,7 @@ class SensitiveHelper
     public function getAllSensitiveWords(): array
     {
         // 如果词库树为null且前缀索引未初始化，则初始化词库
-        if ($this->wordTree === null && !is_array($this->prefixIndex)) {
+        if ($this->wordTree === null) {
             $this->initWordLibrary();
         }
         
@@ -621,6 +622,54 @@ class SensitiveHelper
         }
     }
 
+    /**
+     * 获取模糊匹配发现的敏感词
+     * @param string $content 待检测内容
+     * @return array 返回模糊匹配发现的敏感词数组
+     */
+    public function getFuzzyBadWords(string $content): array 
+    {
+        // 检查并初始化词库
+        if ($this->wordTree === null) {
+            $this->initWordLibrary();
+        }
+        
+        // 确认词库已成功加载且不为空
+        if ($this->wordTree === null || $this->wordTree->isEmpty()) {
+            return [];
+        }
+        
+        $processedContent = $this->preprocessContent($content);
+        
+        // 如果处理后的内容太短，直接返回空数组
+        if (mb_strlen($processedContent, 'utf-8') < 2) {
+            return [];
+        }
+        
+        $allSensitiveWords = $this->getAllSensitiveWords();
+        $foundWords = [];
+        
+        // 按敏感词长度排序，长词优先（更精确）
+        usort($allSensitiveWords, function($a, $b) {
+            return mb_strlen($b, 'utf-8') - mb_strlen($a, 'utf-8');
+        });
+        
+        foreach ($allSensitiveWords as $word) {
+            if ($this->isSubsequenceMatch($word, $processedContent)) {
+                $foundWords[] = $word;
+            }
+        }
+        
+        // 应用白名单过滤
+        if (!empty($this->whitelist)) {
+            $foundWords = array_filter($foundWords, function($word) {
+                return !isset($this->whitelist[$word]);
+            });
+        }
+        
+        return array_values(array_unique($foundWords));
+    }
+
 
     /**
      * 替换敏感字字符
@@ -634,29 +683,39 @@ class SensitiveHelper
      */
     public function replace($content, $replaceChar = '', $repeat = false, $matchType = 1)
     {
-        $detailedBadWords = $this->getBadWord($content, $matchType, 0, true);
-        $processedContent = $this->preprocessContent($content);
-  
-        if (empty($detailedBadWords)) {
-            return $processedContent; 
-        }
-
-        // 从后往前替换，避免 offset 错乱
-        for ($i = count($detailedBadWords) - 1; $i >= 0; $i--) {
-            $badWordInfo = $detailedBadWords[$i];
-            $wordToReplace = $badWordInfo['word'];
-            $offset = $badWordInfo['offset'];
-            $len = $badWordInfo['len'];
-
-            $actualReplaceChar = $replaceChar;
-            if ($repeat) {
-                $actualReplaceChar = str_repeat($replaceChar, mb_strlen($wordToReplace));
+        // 临时禁用变形文本检测，保持原始格式
+        $originalDetectVariantText = $this->detectVariantText;
+        $this->detectVariantText = false;
+        
+        try {
+            $detailedBadWords = $this->getBadWord($content, $matchType, 0, true);
+            
+            if (empty($detailedBadWords)) {
+                return $content;
             }
 
-            $processedContent = self::mb_substr_replace($processedContent, $actualReplaceChar, $offset, $len);
-        }
+            $result = $content;
 
-        return $processedContent;
+            // 从后往前替换，避免 offset 错乱
+            for ($i = count($detailedBadWords) - 1; $i >= 0; $i--) {
+                $badWordInfo = $detailedBadWords[$i];
+                $wordToReplace = $badWordInfo['word'];
+                $offset = $badWordInfo['offset'];
+                $len = $badWordInfo['len'];
+
+                $actualReplaceChar = $replaceChar;
+                if ($repeat) {
+                    $actualReplaceChar = str_repeat($replaceChar, mb_strlen($wordToReplace));
+                }
+
+                $result = self::mb_substr_replace($result, $actualReplaceChar, $offset, $len);
+            }
+
+            return $result;
+        } finally {
+            // 恢复原始配置
+            $this->detectVariantText = $originalDetectVariantText;
+        }
     }
 
     /**
@@ -665,30 +724,40 @@ class SensitiveHelper
      * @param string $sTag 敏感词包裹开始标签
      * @param string $eTag 敏感词包裹结束标签
      * @param int $matchType 匹配类型，默认为 1 (最长匹配)
-     * @return string 返回标记后的内容 (在预处理后的内容上操作)
+     * @return string 返回标记后的内容
      * @throws SensitiveWordException
      */
     public function mark($content, $sTag, $eTag, $matchType = 1)
     {
-        $detailedBadWords = $this->getBadWord($content, $matchType, 0, true);
-        $processedContent = $this->preprocessContent($content);
-  
-        if (empty($detailedBadWords)) {
-            return $processedContent; 
+        // 临时禁用变形文本检测，保持原始格式
+        $originalDetectVariantText = $this->detectVariantText;
+        $this->detectVariantText = false;
+        
+        try {
+            $detailedBadWords = $this->getBadWord($content, $matchType, 0, true);
+            
+            if (empty($detailedBadWords)) {
+                return $content;
+            }
+
+            $result = $content;
+
+            // 从后往前标记，避免 offset 错乱
+            for ($i = count($detailedBadWords) - 1; $i >= 0; $i--) {
+                $badWordInfo = $detailedBadWords[$i];
+                $wordToMark = $badWordInfo['word']; 
+                $offset = $badWordInfo['offset'];
+                $len = $badWordInfo['len'];
+
+                $replacement = $sTag . $wordToMark . $eTag;
+                $result = self::mb_substr_replace($result, $replacement, $offset, $len);
+            }
+
+            return $result;
+        } finally {
+            // 恢复原始配置
+            $this->detectVariantText = $originalDetectVariantText;
         }
-
-        // 从后往前标记，避免 offset 错乱
-        for ($i = count($detailedBadWords) - 1; $i >= 0; $i--) {
-            $badWordInfo = $detailedBadWords[$i];
-            $wordToMark = $badWordInfo['word']; 
-            $offset = $badWordInfo['offset'];
-            $len = $badWordInfo['len'];
-
-            $replacement = $sTag . $wordToMark . $eTag;
-            $processedContent = self::mb_substr_replace($processedContent, $replacement, $offset, $len);
-        }
-
-        return $processedContent;
     }
 
     /**
@@ -700,6 +769,40 @@ class SensitiveHelper
     public function islegal($content)
     {
         return empty($this->getBadWord($content, 1, 1)); 
+    }
+
+         /**
+     * 简单的模糊检测结果缓存
+     */
+    private static $fuzzyCache = [];
+
+    /**
+     * 模糊匹配检测敏感词（处理中间插入字符的绕过）
+     * @param string $content 待检测内容
+     * @return bool 是否包含敏感词
+     */
+    public function fuzzyCheck(string $content): bool
+    {
+        // 检查并初始化词库
+        if ($this->wordTree === null) {
+            $this->initWordLibrary();
+        }
+        
+        // 确认词库已成功加载且不为空
+        if ($this->wordTree === null || $this->wordTree->isEmpty()) {
+            return false;
+        }
+        
+        // 进行模糊检测
+        return $this->performFuzzyMatch($content);
+    }
+
+    /**
+     * 清除模糊检测缓存
+     */
+    public function clearFuzzyCache(): void
+    {
+        self::$fuzzyCache = [];
     }
 
      /**
@@ -739,7 +842,7 @@ class SensitiveHelper
             $wordsAdded = true; 
 
             if ($this->enablePrefixIndex) {
-                if (!is_array($this->prefixIndex)) { 
+                if (empty($this->prefixIndex)) { 
                     $this->prefixIndex = [];
                 }
                 $prefix = mb_substr($word, 0, 1, 'utf-8');
@@ -1215,7 +1318,94 @@ class SensitiveHelper
             }
         }
     }
-
-
-
+    
+    /**
+     * 执行模糊匹配
+     */
+    private function performFuzzyMatch(string $content): bool
+    {
+        // 缓存检查 - 避免重复计算相同内容
+        $cacheKey = md5($content);
+        if (isset(self::$fuzzyCache[$cacheKey])) {
+            return self::$fuzzyCache[$cacheKey];
+        }
+        
+        // 限制缓存大小，避免内存泄漏
+        if (count(self::$fuzzyCache) > 500) {
+            self::$fuzzyCache = array_slice(self::$fuzzyCache, -250, null, true);
+        }
+        
+        $processedContent = $this->preprocessContent($content);
+        
+        // 如果处理后的内容太短，直接返回false
+        if (mb_strlen($processedContent, 'utf-8') < 2) {
+            self::$fuzzyCache[$cacheKey] = false;
+            return false;
+        }
+        
+        $allSensitiveWords = $this->getAllSensitiveWords();
+        
+        // 按敏感词长度排序，短词优先（更容易匹配成功，可以早期退出）
+        usort($allSensitiveWords, function($a, $b) {
+            return mb_strlen($a, 'utf-8') - mb_strlen($b, 'utf-8');
+        });
+        
+        foreach ($allSensitiveWords as $sensitiveWord) {
+            if ($this->isSubsequenceMatch($sensitiveWord, $processedContent)) {
+                self::$fuzzyCache[$cacheKey] = true;
+                return true;
+            }
+        }
+        
+        self::$fuzzyCache[$cacheKey] = false;
+        return false;
+    }
+    
+    /**
+     * 子序列匹配：检查敏感词的字符是否按顺序出现在输入文本中
+     */
+    private function isSubsequenceMatch(string $pattern, string $text): bool
+    {
+        // 快速失败检查
+        $patternLen = mb_strlen($pattern, 'utf-8');
+        if ($patternLen === 0) {
+            return false;
+        }
+        
+        // 预处理：只保留中文字符和字母，移除数字和符号
+        $cleanText = preg_replace('/[\s\.\-_\*\+\~\!\@\#\$\%\^\&\d]/u', '', $text);
+        $textLen = mb_strlen($cleanText, 'utf-8');
+        
+        if ($patternLen > $textLen) {
+            return false;
+        }
+        
+        // 快速检查：第一个和最后一个字符是否存在
+        $firstChar = mb_substr($pattern, 0, 1, 'utf-8');
+        $lastChar = mb_substr($pattern, -1, 1, 'utf-8');
+        
+        if (mb_strpos($cleanText, $firstChar, 0, 'utf-8') === false || 
+            mb_strpos($cleanText, $lastChar, 0, 'utf-8') === false) {
+            return false;
+        }
+        
+        // 双指针算法进行子序列匹配
+        $i = 0; 
+        $j = 0;
+        
+        while ($i < $patternLen && $j < $textLen) {
+            $patternChar = mb_substr($pattern, $i, 1, 'utf-8');
+            $textChar = mb_substr($cleanText, $j, 1, 'utf-8');
+            
+            if ($patternChar === $textChar) {
+                $i++;
+                if ($i === $patternLen) {
+                    return true;
+                }
+            }
+            $j++;
+        }
+        
+        return $i === $patternLen;
+    }
 }
