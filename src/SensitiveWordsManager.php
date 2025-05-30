@@ -29,10 +29,16 @@ class SensitiveWordsManager
     /**
      * 检测内容是否包含敏感词
      * 
+     * @param string $content 待检测内容
+     * @param bool $useFuzzyMatch 是否使用模糊匹配（可检测绕过技术）
+     * @return bool 是否包含敏感词
      * @throws SensitiveWordException
      */
-    public function check(string $content): bool
+    public function check(string $content, bool $useFuzzyMatch = false): bool
     {
+        if ($useFuzzyMatch) {
+            return $this->sensitiveHelper->fuzzyCheck($content);
+        }
         return !$this->sensitiveHelper->islegal($content);
     }
     
@@ -49,10 +55,21 @@ class SensitiveWordsManager
     /**
      * 获取内容中的敏感词
      * 
+     * @param string $content 待检测内容
+     * @param int $wordNum 需要获取的敏感词数量 [默认获取全部]
+     * @param bool $useFuzzyMatch 是否使用模糊匹配（可检测绕过技术）
+     * @return array 返回敏感词数组
      * @throws SensitiveWordException
      */
-    public function getBadWords(string $content, int $wordNum = 0): array
+    public function getBadWords(string $content, int $wordNum = 0, bool $useFuzzyMatch = false): array
     {
+        if ($useFuzzyMatch) {
+            $fuzzyWords = $this->sensitiveHelper->getFuzzyBadWords($content);
+            if ($wordNum > 0 && count($fuzzyWords) > $wordNum) {
+                return array_slice($fuzzyWords, 0, $wordNum);
+            }
+            return $fuzzyWords;
+        }
         return $this->sensitiveHelper->getBadWord($content, 1, $wordNum);
     }
     
@@ -238,4 +255,14 @@ class SensitiveWordsManager
     {
         return $this->sensitiveHelper->getAllSensitiveWords();
     }
+
+    /**
+     * 清除模糊检测缓存
+     * @return void
+     */
+    public function clearFuzzyCache(): void
+    {
+        $this->sensitiveHelper->clearFuzzyCache();
+    }
+    
 } 
