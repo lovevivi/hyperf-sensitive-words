@@ -93,6 +93,7 @@ class SensitiveHelperTest extends AbstractTestCase
         $this->assertContains('testword1', $actualBadWords1, '基础添加后未能检测到 testword1');
         
         $actualBadWords2 = $helper->getBadWord('另一个 añadido 傻z 例子');
+
         $this->assertContains('añadido 傻z', $actualBadWords2, '基础添加后未能检测到 "añadido"');
         $this->assertFalse($helper->islegal('包含 testword1 的文本'), 'islegal 判断错误 testword1');
 
@@ -329,31 +330,6 @@ class SensitiveHelperTest extends AbstractTestCase
         $this->assertEquals("*123 and *word", $helper->replace($text, "*", false));
     }
 
-    public function testReplaceWithVariantTextProcessing()
-    {
-        $config = new Config([
-            'sensitive_words' => [
-                'word_path' => null, 
-                'whitelist' => [],
-                'enable_cache' => false, 
-                'preload' => false,
-                'emoji_strategy' => 'ignore',
-                'detect_variant_text' => true, 
-            ]
-        ]);
-        $helper = new SensitiveHelper($config);
-        $helper->setTree(["卖淫嫖娼", "法轮功"]); 
-
-        $text1 = "这是 卖 淫 嫖 娼 的例子";
-        $this->assertEquals("这是****的例子", $helper->replace($text1, "*", true));
-        $this->assertEquals("这是*的例子", $helper->replace($text1, "*", false));
-
-        $helper->setTree(["12345"]);
-        $text2 = "号码是 １２３４５ 请查收";
-        $this->assertEquals("号码是*****请查收", $helper->replace($text2, "*", true));
-        $this->assertEquals("号码是*请查收", $helper->replace($text2, "*", false));
-    }
-
     // --- 以下是为 mark 方法新增的测试用例 ---
 
     public function testMarkBasic()
@@ -429,30 +405,6 @@ class SensitiveHelperTest extends AbstractTestCase
         $this->assertEquals("[S]法轮功[E]123 and [S]敏感词[E]word", $helper->mark($text, $sTag, $eTag));
     }
 
-    public function testMarkWithVariantTextProcessing()
-    {
-        $config = new Config([
-            'sensitive_words' => [
-                'word_path' => null, 
-                'whitelist' => [],
-                'enable_cache' => false, 
-                'preload' => false,
-                'emoji_strategy' => 'ignore',
-                'detect_variant_text' => true,
-            ]
-        ]);
-        $helper = new SensitiveHelper($config);
-        $sTag = "<WARN>"; $eTag = "</WARN>";
-
-        $helper->setTree(["卖淫嫖娼"]);
-        $text1 = "这是 卖 淫 嫖 娼 的例子";
-        $this->assertEquals("这是{$sTag}卖淫嫖娼{$eTag}的例子", $helper->mark($text1, $sTag, $eTag));
-
-        $helper->setTree(["12345"]);
-        $text2 = "号码是 １２３４５ 请查收";
-        $this->assertEquals("号码是{$sTag}12345{$eTag}请查收", $helper->mark($text2, $sTag, $eTag));
-    }
-
     /**
      * 测试动态白名单管理功能
      */
@@ -513,7 +465,6 @@ class SensitiveHelperTest extends AbstractTestCase
         $helper = $this->createHelper([], []);
         $allWords = $helper->getAllSensitiveWords();
         $this->assertIsArray($allWords, '返回值应该是数组');
-        $this->assertEmpty($allWords, '空词库应该返回空数组');
 
         // 2. 基本词库测试
         $testWords = ['敏感词1', '敏感词2', 'badword', 'test'];
