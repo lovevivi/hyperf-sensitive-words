@@ -5,6 +5,8 @@ namespace SensitiveWords\Helpers;
 use Hyperf\Context\Context;
 use Hyperf\Contract\ConfigInterface;
 use SensitiveWords\Exceptions\SensitiveWordException;
+use SensitiveWords\Filters\FilterManager;
+use SensitiveWords\Matchers\FuzzyMatcher;
 
 class SensitiveHelper
 {
@@ -113,6 +115,19 @@ class SensitiveHelper
      */
     protected $whitelist = [];
 
+    /**
+     * 过滤器管理器
+     *
+     * @var FilterManager
+     */
+    protected $filterManager;
+
+    /**
+     * 模糊匹配器
+     *
+     * @var FuzzyMatcher
+     */
+    protected $fuzzyMatcher;
 
     public function __construct(ConfigInterface $config)
     {
@@ -158,6 +173,11 @@ class SensitiveHelper
         }
         
         $this->cacheFilePath = $cachePath . '/sensitive_words_tree.cache';
+        
+        // 初始化过滤器管理器和模糊匹配器
+        $this->filterManager = new FilterManager();
+        $this->filterManager->setDefaultFilters();
+        $this->fuzzyMatcher = new FuzzyMatcher();
         
         // 如果需要预热，立即初始化词库
         if ($this->config->get('sensitive_words.preload', false)) {
@@ -596,6 +616,18 @@ class SensitiveHelper
         }
         
         $finalBadWordsWithDetails = $this->filterWithContextualWhitelist($processedContent, $initialBadWordListWithDetails);
+        
+        if (!empty($finalBadWordsWithDetails) && $this->filterManager !== null) {
+            $filteredWordsWithDetails = [];
+            foreach ($finalBadWordsWithDetails as $badWordItem) {
+                $word = $badWordItem['word'];
+                // 使用过滤器管理器检查是否应该过滤这个词
+                if (!$this->filterManager->shouldFilter($word, $content)) {
+                    $filteredWordsWithDetails[] = $badWordItem;
+                }
+            }
+            $finalBadWordsWithDetails = $filteredWordsWithDetails;
+        }
 
         // 统一处理 $wordNum，如果需要限制数量，先排序再截取
         if ($wordNum > 0 && count($finalBadWordsWithDetails) > $wordNum) {
@@ -640,11 +672,7 @@ class SensitiveHelper
         }
         
         $processedContent = $this->preprocessContent($content);
-        
-        // 如果处理后的内容太短，直接返回空数组
-        if (mb_strlen($processedContent, 'utf-8') < 2) {
-            return [];
-        }
+        $originalContent = $content; // 保留原始文本用于过滤器分析
         
         $allSensitiveWords = $this->getAllSensitiveWords();
         $foundWords = [];
@@ -655,8 +683,11 @@ class SensitiveHelper
         });
         
         foreach ($allSensitiveWords as $word) {
-            if ($this->isSubsequenceMatch($word, $processedContent)) {
-                $foundWords[] = $word;
+            if ($this->fuzzyMatcher->isSubsequenceMatch($word, $processedContent)) {
+                // 使用过滤器管理器进行统一过滤
+                if (!$this->filterManager->shouldFilter($word, $originalContent)) {
+                    $foundWords[] = $word;
+                }
             }
         }
         
@@ -669,7 +700,6 @@ class SensitiveHelper
         
         return array_values(array_unique($foundWords));
     }
-
 
     /**
      * 替换敏感字字符
@@ -771,11 +801,6 @@ class SensitiveHelper
         return empty($this->getBadWord($content, 1, 1)); 
     }
 
-         /**
-     * 简单的模糊检测结果缓存
-     */
-    private static $fuzzyCache = [];
-
     /**
      * 模糊匹配检测敏感词（处理中间插入字符的绕过）
      * @param string $content 待检测内容
@@ -793,8 +818,30 @@ class SensitiveHelper
             return false;
         }
         
-        // 进行模糊检测
-        return $this->performFuzzyMatch($content);
+        // 缓存检查 - 避免重复计算相同内容
+        $cacheKey = $this->fuzzyMatcher->getCacheKey($content);
+        $cachedResult = $this->fuzzyMatcher->checkCache($cacheKey);
+        if ($cachedResult !== null) {
+            return $cachedResult;
+        }
+        
+        $processedContent = $this->preprocessContent($content);
+        $allSensitiveWords = $this->getAllSensitiveWords();
+        
+        // 按敏感词长度排序，短词优先（更容易匹配成功，可以早期退出）
+        usort($allSensitiveWords, function($a, $b) {
+            return mb_strlen($a, 'utf-8') - mb_strlen($b, 'utf-8');
+        });
+        
+        foreach ($allSensitiveWords as $sensitiveWord) {
+            if ($this->fuzzyMatcher->isSubsequenceMatch($sensitiveWord, $processedContent)) {
+                $this->fuzzyMatcher->setCache($cacheKey, true);
+                return true;
+            }
+        }
+        
+        $this->fuzzyMatcher->setCache($cacheKey, false);
+        return false;
     }
 
     /**
@@ -802,7 +849,7 @@ class SensitiveHelper
      */
     public function clearFuzzyCache(): void
     {
-        self::$fuzzyCache = [];
+        $this->fuzzyMatcher->clearCache();
     }
 
      /**
@@ -1158,74 +1205,18 @@ class SensitiveHelper
         // 用户自定义映射表路径
         $mapPath = $this->config->get('sensitive_words.variant_map_path', '');
         
-        // 尝试从用户自定义路径加载
-        if (!empty($mapPath) && file_exists($mapPath)) {
-            $customMap = include $mapPath;
-            if (is_array($customMap)) {
-                $this->variantMap = $customMap;
-                return;
-            }
+        // 如果没有配置用户路径，使用组件默认的 variant_map.php
+        if (empty($mapPath)) {
+            $mapPath = dirname(dirname(__DIR__)) . '/data/variant_map.php';
         }
         
-        // 使用内置的基础映射表
-        $this->variantMap = [
-            // 全角转半角
-            '０' => '0', '１' => '1', '２' => '2', '３' => '3', '４' => '4',
-            '５' => '5', '６' => '6', '７' => '7', '８' => '8', '９' => '9',
-            'ａ' => 'a', 'ｂ' => 'b', 'ｃ' => 'c', 'ｄ' => 'd', 'ｅ' => 'e',
-            'ｆ' => 'f', 'ｇ' => 'g', 'ｈ' => 'h', 'ｉ' => 'i', 'ｊ' => 'j',
-            'ｋ' => 'k', 'ｌ' => 'l', 'ｍ' => 'm', 'ｎ' => 'n', 'ｏ' => 'o',
-            'ｐ' => 'p', 'ｑ' => 'q', 'ｒ' => 'r', 'ｓ' => 's', 'ｔ' => 't',
-            'ｕ' => 'u', 'ｖ' => 'v', 'ｗ' => 'w', 'ｘ' => 'x', 'ｙ' => 'y', 'ｚ' => 'z',
-            
-            // 特殊数字
-            '⓪' => '0', '①' => '1', '②' => '2', '③' => '3', '④' => '4', 
-            '⑤' => '5', '⑥' => '6', '⑦' => '7', '⑧' => '8', '⑨' => '9',
-            '⑴' => '1', '⑵' => '2', '⑶' => '3', '⑷' => '4', '⑸' => '5',
-            '⑹' => '6', '⑺' => '7', '⑻' => '8', '⑼' => '9', '⑽' => '10',
-            
-            // 常见谐音/拼音映射（示例，可根据需要扩展）
-            '2' => '2|to|too|two',
-            '4' => '4|for|four',
-            
-            // 特殊替换字符
-            '.' => '',
-            '。' => '',
-            ',' => '',
-            '，' => '',
-            '!' => '',
-            '！' => '',
-            '?' => '',
-            '？' => '',
-            '@' => '',
-            '#' => '',
-            '$' => '',
-            '%' => '',
-            '^' => '',
-            '&' => '',
-            '*' => '',
-            '(' => '',
-            ')' => '',
-            '-' => '',
-            '_' => '',
-            '+' => '',
-            '=' => '',
-            '[' => '',
-            ']' => '',
-            '{' => '',
-            '}' => '',
-            '|' => '',
-            '\\' => '',
-            '/' => '',
-            ':' => '',
-            ';' => '',
-            '"' => '',
-            '\'' => '',
-            '<' => '',
-            '>' => '',
-            '`' => '',
-            '~' => '',
-        ];
+        // 加载映射表
+        if (file_exists($mapPath)) {
+            $map = include $mapPath;
+            if (is_array($map)) {
+                $this->variantMap = $map;
+            }
+        }
     }
 
     /**
@@ -1317,95 +1308,5 @@ class SensitiveHelper
                 $this->traverseTree($childNode, $currentWord . $key, $words);
             }
         }
-    }
-    
-    /**
-     * 执行模糊匹配
-     */
-    private function performFuzzyMatch(string $content): bool
-    {
-        // 缓存检查 - 避免重复计算相同内容
-        $cacheKey = md5($content);
-        if (isset(self::$fuzzyCache[$cacheKey])) {
-            return self::$fuzzyCache[$cacheKey];
-        }
-        
-        // 限制缓存大小，避免内存泄漏
-        if (count(self::$fuzzyCache) > 500) {
-            self::$fuzzyCache = array_slice(self::$fuzzyCache, -250, null, true);
-        }
-        
-        $processedContent = $this->preprocessContent($content);
-        
-        // 如果处理后的内容太短，直接返回false
-        if (mb_strlen($processedContent, 'utf-8') < 2) {
-            self::$fuzzyCache[$cacheKey] = false;
-            return false;
-        }
-        
-        $allSensitiveWords = $this->getAllSensitiveWords();
-        
-        // 按敏感词长度排序，短词优先（更容易匹配成功，可以早期退出）
-        usort($allSensitiveWords, function($a, $b) {
-            return mb_strlen($a, 'utf-8') - mb_strlen($b, 'utf-8');
-        });
-        
-        foreach ($allSensitiveWords as $sensitiveWord) {
-            if ($this->isSubsequenceMatch($sensitiveWord, $processedContent)) {
-                self::$fuzzyCache[$cacheKey] = true;
-                return true;
-            }
-        }
-        
-        self::$fuzzyCache[$cacheKey] = false;
-        return false;
-    }
-    
-    /**
-     * 子序列匹配：检查敏感词的字符是否按顺序出现在输入文本中
-     */
-    private function isSubsequenceMatch(string $pattern, string $text): bool
-    {
-        // 快速失败检查
-        $patternLen = mb_strlen($pattern, 'utf-8');
-        if ($patternLen === 0) {
-            return false;
-        }
-        
-        // 预处理：只保留中文字符和字母，移除数字和符号
-        $cleanText = preg_replace('/[\s\.\-_\*\+\~\!\@\#\$\%\^\&\d]/u', '', $text);
-        $textLen = mb_strlen($cleanText, 'utf-8');
-        
-        if ($patternLen > $textLen) {
-            return false;
-        }
-        
-        // 快速检查：第一个和最后一个字符是否存在
-        $firstChar = mb_substr($pattern, 0, 1, 'utf-8');
-        $lastChar = mb_substr($pattern, -1, 1, 'utf-8');
-        
-        if (mb_strpos($cleanText, $firstChar, 0, 'utf-8') === false || 
-            mb_strpos($cleanText, $lastChar, 0, 'utf-8') === false) {
-            return false;
-        }
-        
-        // 双指针算法进行子序列匹配
-        $i = 0; 
-        $j = 0;
-        
-        while ($i < $patternLen && $j < $textLen) {
-            $patternChar = mb_substr($pattern, $i, 1, 'utf-8');
-            $textChar = mb_substr($cleanText, $j, 1, 'utf-8');
-            
-            if ($patternChar === $textChar) {
-                $i++;
-                if ($i === $patternLen) {
-                    return true;
-                }
-            }
-            $j++;
-        }
-        
-        return $i === $patternLen;
     }
 }
